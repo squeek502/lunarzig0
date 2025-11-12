@@ -95,11 +95,6 @@ local function isNumberContinuation(c)
     (c >= ('q'):byte() and c <= ('z'):byte()) or (c >= ('Q'):byte() and c <= ('Z'):byte())
 end
 
--- State functions:
--- On token emission, return: nil
--- On state change/continue, return: state
-local states = {}
-
 function Tokenizer:start(result)
   local c = self.buffer:byte(self.index)
   if c == 0 then
