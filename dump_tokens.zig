@@ -13,18 +13,18 @@ pub fn main() !void {
 
     const path = args[1];
     const data = try std.fs.cwd().readFileAllocOptions(
-        allocator,
         path,
-        std.math.maxInt(usize),
-        null,
-        @alignOf(u8),
+        allocator,
+        .unlimited,
+        .of(u8),
         0,
     );
     defer allocator.free(data);
 
-    const stdout = std.io.getStdOut();
-    var buf_stdout = std.io.bufferedWriter(stdout.writer());
-    const writer = buf_stdout.writer();
+    const stdout_file = std.fs.File.stdout();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout_writer = stdout_file.writer(&stdout_buf);
+    const writer = &stdout_writer.interface;
 
     var tokenizer = std.zig.Tokenizer.init(data);
     while (true) {
@@ -38,5 +38,5 @@ pub fn main() !void {
         if (token.tag == .eof) break;
     }
 
-    try buf_stdout.flush();
+    try writer.flush();
 }

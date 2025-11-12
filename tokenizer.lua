@@ -6,8 +6,6 @@ local keywords_list = {
   "anyframe",
   "anytype",
   "asm",
-  "async",
-  "await",
   "break",
   "callconv",
   "catch",
@@ -59,6 +57,7 @@ Tokenizer.__index = Tokenizer
 
 -- buffer must be NUL-terminated
 function Tokenizer.init(buffer)
+  assert(buffer:byte(#buffer) == 0)
   local self = setmetatable({}, Tokenizer)
   self.buffer = buffer
   self.index = 1
@@ -97,41 +96,41 @@ local function isNumberContinuation(c)
 end
 
 -- State functions:
--- On token emission. return: nil
+-- On token emission, return: nil
 -- On state change/continue, return: state
 local states = {}
 
-states.start = function(self, c, result, current_state)
+function Tokenizer:start(result)
+  local c = self.buffer:byte(self.index)
   if c == 0 then
     if self.index == #self.buffer then
       result.tag = "eof"
-      result.loc = {
-        start = self.index,
-        ["end"] = self.index,
-      }
-      result.finished = true
-      return
+      result.start = self.index
+      result["end"] = self.index
+      return result
     end
-    return states.invalid
+    return self:invalid(result)
   elseif isWhitespace(c) then
-    result.loc.start = self.index + 1
+    self.index = self.index + 1
+    result.start = self.index
+    return self:start(result)
   elseif c == ('"'):byte() then
     result.tag = "string_literal"
-    return states.string_literal
+    return self:string_literal(result)
   elseif c == ("'"):byte() then
     result.tag = "char_literal"
-    return states.char_literal
+    return self:char_literal(result)
   elseif isIdentifierStart(c) then
     result.tag = "identifier"
-    return states.identifier
+    return self:identifier(result)
   elseif c == ('@'):byte() then
-    return states.saw_at_sign
+    return self:saw_at_sign(result)
   elseif c == ('='):byte() then
-    return states.equal
+    return self:equal(result)
   elseif c == ('!'):byte() then
-    return states.bang
+    return self:bang(result)
   elseif c == ('|'):byte() then
-    return states.pipe
+    return self:pipe(result)
   elseif c == ('('):byte() then
     result.tag = "l_paren"
     self.index = self.index + 1
@@ -165,20 +164,20 @@ states.start = function(self, c, result, current_state)
     self.index = self.index + 1
     return
   elseif c == ('%'):byte() then
-    return states.percent
+    return self:percent(result)
   elseif c == ('*'):byte() then
-    return states.asterisk
+    return self:asterisk(result)
   elseif c == ('+'):byte() then
-    return states.plus
+    return self:plus(result)
   elseif c == ('<'):byte() then
-    return states.angle_bracket_left
+    return self:angle_bracket_left(result)
   elseif c == ('>'):byte() then
-    return states.angle_bracket_right
+    return self:angle_bracket_right(result)
   elseif c == ('^'):byte() then
-    return states.caret
+    return self:caret(result)
   elseif c == ('\\'):byte() then
     result.tag = "multiline_string_literal_line"
-    return states.backslash
+    return self:backslash(result)
   elseif c == ('{'):byte() then
     result.tag = "l_brace"
     self.index = self.index + 1
@@ -192,39 +191,43 @@ states.start = function(self, c, result, current_state)
     self.index = self.index + 1
     return
   elseif c == ('.'):byte() then
-    return states.period
+    return self:period(result)
   elseif c == ('-'):byte() then
-    return states.minus
+    return self:minus(result)
   elseif c == ('/'):byte() then
-    return states.slash
+    return self:slash(result)
   elseif c == ('&'):byte() then
-    return states.ampersand
+    return self:ampersand(result)
   elseif isDigit(c) then
     result.tag = "number_literal"
-    return states.int
+    self.index = self.index + 1
+    return self:int(result)
   else
-    return states.invalid
+    return self:invalid(result)
   end
-
-  return current_state
 end
 
-states.expect_newline = function(self, c, result, current_state)
+function Tokenizer:expect_newline(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == 0 then
     if self.index == #self.buffer then
       result.tag = "invalid"
       return
     end
-    return states.invalid
+    return self:invalid(result)
   elseif c == ('\n'):byte() then
-    result.loc.start = self.index + 1
-    return states.start
+    self.index = self.index + 1
+    result.start = self.index
+    return self:start(result)
   else
-    return states.invalid
+    return self:invalid(result)
   end
 end
 
-states.invalid = function(self, c, result, current_state)
+function Tokenizer:invalid(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == 0 then
     if self.index == #self.buffer then
       result.tag = "invalid"
@@ -234,25 +237,29 @@ states.invalid = function(self, c, result, current_state)
     result.tag = "invalid"
     return
   end
-  return current_state
+  return self:invalid(result)
 end
 
-states.saw_at_sign = function(self, c, result, current_state)
+function Tokenizer:saw_at_sign(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == 0 or c == ('\n'):byte() then
     result.tag = "invalid"
     return
   elseif c == ('"'):byte() then
     result.tag = "identifier"
-    return states.string_literal
+    return self:string_literal(result)
   elseif isIdentifierStart(c) then
     result.tag = "builtin"
-    return states.builtin
+    return self:builtin(result)
   else
-    return states.invalid
+    return self:invalid(result)
   end
 end
 
-states.ampersand = function(self, c, result, current_state)
+function Tokenizer:ampersand(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == ('='):byte() then
     result.tag = "ampersand_equal"
     self.index = self.index + 1
@@ -263,7 +270,9 @@ states.ampersand = function(self, c, result, current_state)
   end
 end
 
-states.asterisk = function(self, c, result, current_state)
+function Tokenizer:asterisk(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == ('='):byte() then
     result.tag = "asterisk_equal"
     self.index = self.index + 1
@@ -273,16 +282,18 @@ states.asterisk = function(self, c, result, current_state)
     self.index = self.index + 1
     return
   elseif c == ('%'):byte() then
-    return states.asterisk_percent
+    return self:asterisk_percent(result)
   elseif c == ('|'):byte() then
-    return states.asterisk_pipe
+    return self:asterisk_pipe(result)
   else
     result.tag = "asterisk"
     return
   end
 end
 
-states.asterisk_percent = function(self, c, result, current_state)
+function Tokenizer:asterisk_percent(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == ('='):byte() then
     result.tag = "asterisk_percent_equal"
     self.index = self.index + 1
@@ -293,7 +304,9 @@ states.asterisk_percent = function(self, c, result, current_state)
   end
 end
 
-states.asterisk_pipe = function(self, c, result, current_state)
+function Tokenizer:asterisk_pipe(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == ('='):byte() then
     result.tag = "asterisk_pipe_equal"
     self.index = self.index + 1
@@ -304,7 +317,9 @@ states.asterisk_pipe = function(self, c, result, current_state)
   end
 end
 
-states.percent = function(self, c, result, current_state)
+function Tokenizer:percent(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == ('='):byte() then
     result.tag = "percent_equal"
     self.index = self.index + 1
@@ -315,7 +330,9 @@ states.percent = function(self, c, result, current_state)
   end
 end
 
-states.plus = function(self, c, result, current_state)
+function Tokenizer:plus(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == ('='):byte() then
     result.tag = "plus_equal"
     self.index = self.index + 1
@@ -325,16 +342,18 @@ states.plus = function(self, c, result, current_state)
     self.index = self.index + 1
     return
   elseif c == ('%'):byte() then
-    return states.plus_percent
+    return self:plus_percent(result)
   elseif c == ('|'):byte() then
-    return states.plus_pipe
+    return self:plus_pipe(result)
   else
     result.tag = "plus"
     return
   end
 end
 
-states.plus_percent = function(self, c, result, current_state)
+function Tokenizer:plus_percent(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == ('='):byte() then
     result.tag = "plus_percent_equal"
     self.index = self.index + 1
@@ -345,7 +364,9 @@ states.plus_percent = function(self, c, result, current_state)
   end
 end
 
-states.plus_pipe = function(self, c, result, current_state)
+function Tokenizer:plus_pipe(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == ('='):byte() then
     result.tag = "plus_pipe_equal"
     self.index = self.index + 1
@@ -356,7 +377,9 @@ states.plus_pipe = function(self, c, result, current_state)
   end
 end
 
-states.caret = function(self, c, result, current_state)
+function Tokenizer:caret(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == ('='):byte() then
     result.tag = "caret_equal"
     self.index = self.index + 1
@@ -367,11 +390,13 @@ states.caret = function(self, c, result, current_state)
   end
 end
 
-states.identifier = function(self, c, result, current_state)
+function Tokenizer:identifier(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if isIdentifierContinuation(c) then
-    return current_state
+    return self:identifier(result)
   else
-    local slice = self.buffer:sub(result.loc.start, self.index - 1)
+    local slice = self.buffer:sub(result.start, self.index - 1)
     local keyword_tag = keywords[slice]
     if keyword_tag then
       result.tag = keyword_tag
@@ -380,32 +405,38 @@ states.identifier = function(self, c, result, current_state)
   end
 end
 
-states.builtin =  function(self, c, result, current_state)
+function Tokenizer:builtin(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if isIdentifierContinuation(c) then
-    return current_state
+    return self:builtin(result)
   else
     return
   end
 end
 
-states.backslash = function(self, c, result, current_state)
+function Tokenizer:backslash(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == 0 then
     result.tag = "invalid"
     return
   elseif c == ('\\'):byte() then
-    return states.multiline_string_literal_line
+    return self:multiline_string_literal_line(result)
   elseif c == ('\n'):byte() then
     result.tag = "invalid"
     return
   else
-    return states.invalid
+    return self:invalid(result)
   end
 end
 
-states.string_literal = function(self, c, result, current_state)
+function Tokenizer:string_literal(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == 0 then
     if self.index ~= #self.buffer then
-      return states.invalid
+      return self:invalid(result)
     end
     result.tag = "invalid"
     return
@@ -413,30 +444,34 @@ states.string_literal = function(self, c, result, current_state)
     result.tag = "invalid"
     return
   elseif c == ('\\'):byte() then
-    return states.string_literal_backslash
+    return self:string_literal_backslash(result)
   elseif c == ('"'):byte() then
     self.index = self.index + 1
     return
   elseif isControl(c) then
-    return states.invalid
+    return self:invalid(result)
   else
-    return current_state
+    return self:string_literal(result)
   end
 end
 
-states.string_literal_backslash = function(self, c, result, current_state)
+function Tokenizer:string_literal_backslash(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == 0 or c == ('\n'):byte() then
     result.tag = "invalid"
     return
   else
-    return states.string_literal
+    return self:string_literal(result)
   end
 end
 
-states.char_literal = function(self, c, result, current_state)
+function Tokenizer:char_literal(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == 0 then
     if self.index ~= #self.buffer then
-      return states.invalid
+      return self:invalid(result)
     end
     result.tag = "invalid"
     return
@@ -444,21 +479,23 @@ states.char_literal = function(self, c, result, current_state)
     result.tag = "invalid"
     return
   elseif c == ('\\'):byte() then
-    return states.char_literal_backslash
+    return self:char_literal_backslash(result)
   elseif c == ("'"):byte() then
     self.index = self.index + 1
     return
   elseif isControl(c) then
-    return states.invalid
+    return self:invalid(result)
   else
-    return current_state
+    return self:char_literal(result)
   end
 end
 
-states.char_literal_backslash = function(self, c, result, current_state)
+function Tokenizer:char_literal_backslash(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == 0 then
     if self.index ~= #self.buffer then
-      return states.invalid
+      return self:invalid(result)
     end
     result.tag = "invalid"
     return
@@ -466,36 +503,38 @@ states.char_literal_backslash = function(self, c, result, current_state)
     result.tag = "invalid"
     return
   elseif isControl(c) then
-    return states.invalid
+    return self:invalid(result)
   else
-    return states.char_literal
+    return self:char_literal(result)
   end
 end
 
-states.multiline_string_literal_line = function(self, c, result, current_state)
+function Tokenizer:multiline_string_literal_line(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == 0 then
     if self.index ~= #self.buffer then
-      return states.invalid
+      return self:invalid(result)
     end
     return
   elseif c == ('\n'):byte() then
-    self.index = self.index + 1
     return
   elseif c == ('\r'):byte() then
     if self.buffer:byte(self.index + 1) == ('\n'):byte() then
-      self.index = self.index + 2
       return
     else
-      return states.invalid
+      return self:invalid(result)
     end
   elseif isControl(c) then
-    return states.invalid
+    return self:invalid(result)
   else
-    return current_state
+    return self:multiline_string_literal_line(result)
   end
 end
 
-states.bang = function(self, c, result, current_state)
+function Tokenizer:bang(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == ('='):byte() then
     result.tag = "bang_equal"
     self.index = self.index + 1
@@ -506,7 +545,9 @@ states.bang = function(self, c, result, current_state)
   end
 end
 
-states.pipe = function(self, c, result, current_state)
+function Tokenizer:pipe(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == ('='):byte() then
     result.tag = "pipe_equal"
     self.index = self.index + 1
@@ -521,7 +562,9 @@ states.pipe = function(self, c, result, current_state)
   end
 end
 
-states.equal = function(self, c, result, current_state)
+function Tokenizer:equal(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == ('='):byte() then
     result.tag = "equal_equal"
     self.index = self.index + 1
@@ -536,7 +579,9 @@ states.equal = function(self, c, result, current_state)
   end
 end
 
-states.minus = function(self, c, result, current_state)
+function Tokenizer:minus(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == ('>'):byte() then
     result.tag = "arrow"
     self.index = self.index + 1
@@ -546,16 +591,18 @@ states.minus = function(self, c, result, current_state)
     self.index = self.index + 1
     return
   elseif c == ('%'):byte() then
-    return states.minus_percent
+    return self:minus_percent(result)
   elseif c == ('|'):byte() then
-    return states.minus_pipe
+    return self:minus_pipe(result)
   else
     result.tag = "minus"
     return
   end
 end
 
-states.minus_percent = function(self, c, result, current_state)
+function Tokenizer:minus_percent(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == ('='):byte() then
     result.tag = "minus_percent_equal"
     self.index = self.index + 1
@@ -566,7 +613,9 @@ states.minus_percent = function(self, c, result, current_state)
   end
 end
 
-states.minus_pipe = function(self, c, result, current_state)
+function Tokenizer:minus_pipe(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == ('='):byte() then
     result.tag = "minus_pipe_equal"
     self.index = self.index + 1
@@ -577,9 +626,11 @@ states.minus_pipe = function(self, c, result, current_state)
   end
 end
 
-states.angle_bracket_left = function(self, c, result, current_state)
+function Tokenizer:angle_bracket_left(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == ('<'):byte() then
-    return states.angle_bracket_angle_bracket_left
+    return self:angle_bracket_angle_bracket_left(result)
   elseif c == ('='):byte() then
     result.tag = "angle_bracket_left_equal"
     self.index = self.index + 1
@@ -590,20 +641,24 @@ states.angle_bracket_left = function(self, c, result, current_state)
   end
 end
 
-states.angle_bracket_angle_bracket_left = function(self, c, result, current_state)
+function Tokenizer:angle_bracket_angle_bracket_left(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == ('='):byte() then
     result.tag = "angle_bracket_angle_bracket_left_equal"
     self.index = self.index + 1
     return
   elseif c == ('|'):byte() then
-    return states.angle_bracket_angle_bracket_left_pipe
+    return self:angle_bracket_angle_bracket_left_pipe(result)
   else
     result.tag = "angle_bracket_angle_bracket_left"
     return
   end
 end
 
-states.angle_bracket_angle_bracket_left_pipe = function(self, c, result, current_state)
+function Tokenizer:angle_bracket_angle_bracket_left_pipe(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == ('='):byte() then
     result.tag = "angle_bracket_angle_bracket_left_pipe_equal"
     self.index = self.index + 1
@@ -614,9 +669,11 @@ states.angle_bracket_angle_bracket_left_pipe = function(self, c, result, current
   end
 end
 
-states.angle_bracket_right = function(self, c, result, current_state)
+function Tokenizer:angle_bracket_right(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == ('>'):byte() then
-    return states.angle_bracket_angle_bracket_right
+    return self:angle_bracket_angle_bracket_right(result)
   elseif c == ('='):byte() then
     result.tag = "angle_bracket_right_equal"
     self.index = self.index + 1
@@ -627,7 +684,9 @@ states.angle_bracket_right = function(self, c, result, current_state)
   end
 end
 
-states.angle_bracket_angle_bracket_right = function(self, c, result, current_state)
+function Tokenizer:angle_bracket_angle_bracket_right(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == ('='):byte() then
     result.tag = "angle_bracket_angle_bracket_right_equal"
     self.index = self.index + 1
@@ -638,18 +697,22 @@ states.angle_bracket_angle_bracket_right = function(self, c, result, current_sta
   end
 end
 
-states.period = function(self, c, result, current_state)
+function Tokenizer:period(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == ('.'):byte() then
-    return states.period_2
+    return self:period_2(result)
   elseif c == ('*'):byte() then
-    return states.period_asterisk
+    return self:period_asterisk(result)
   else
     result.tag = "period"
     return
   end
 end
 
-states.period_2 = function(self, c, result, current_state)
+function Tokenizer:period_2(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == ('.'):byte() then
     result.tag = "ellipsis3"
     self.index = self.index + 1
@@ -660,7 +723,9 @@ states.period_2 = function(self, c, result, current_state)
   end
 end
 
-states.period_asterisk = function(self, c, result, current_state)
+function Tokenizer:period_asterisk(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == ('*'):byte() then
     result.tag = "invalid_periodasterisks"
     return
@@ -670,9 +735,11 @@ states.period_asterisk = function(self, c, result, current_state)
   end
 end
 
-states.slash = function(self, c, result, current_state)
+function Tokenizer:slash(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == ('/'):byte() then
-    return states.line_comment_start
+    return self:line_comment_start(result)
   elseif c == ('='):byte() then
     result.tag = "slash_equal"
     self.index = self.index + 1
@@ -683,181 +750,169 @@ states.slash = function(self, c, result, current_state)
   end
 end
 
-states.line_comment_start = function(self, c, result, current_state)
+function Tokenizer:line_comment_start(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == 0 then
     if self.index ~= #self.buffer then
-      return states.invalid
+      return self:invalid(result)
     end
     result.tag = "eof"
-    result.loc = {
-      start = self.index,
-      ["end"] = self.index,
-    }
-    result.finished = true
+    result.start = self.index
+    result["end"] = self.index
     return
   elseif c == ('/'):byte() then
-    return states.doc_comment_start
+    return self:doc_comment_start(result)
   elseif c == ('!'):byte() then
     result.tag = "container_doc_comment"
-    return states.doc_comment
+    return self:doc_comment(result)
   elseif c == ('\r'):byte() then
-    return states.expect_newline
+    return self:expect_newline(result)
   elseif c == ('\n'):byte() then
-    result.loc.start = self.index + 1
-    return states.start
+    self.index = self.index + 1
+    result.start = self.index
+    return self:start(result)
   elseif isControl(c) then
-    return states.invalid
+    return self:invalid(result)
   else
-    return states.line_comment
+    return self:line_comment(result)
   end
 end
 
-states.doc_comment_start = function(self, c, result, current_state)
+function Tokenizer:doc_comment_start(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == 0 or c == ('\n'):byte() then
     result.tag = "doc_comment"
     return
   elseif c == ('\r'):byte() then
     if self.buffer:byte(self.index + 1) == ('\n'):byte() then
-      self.index = self.index + 1
       result.tag = "doc_comment"
       return
     else
-      return states.invalid
+      return self:invalid(result)
     end
   elseif c == ('/'):byte() then
-    return states.line_comment
+    return self:line_comment(result)
   elseif isControl(c) then
-    return states.invalid
+    return self:invalid(result)
   else
     result.tag = "doc_comment"
-    return states.doc_comment
+    return self:doc_comment(result)
   end
 end
 
-states.line_comment = function(self, c, result, current_state)
+function Tokenizer:line_comment(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == 0 then
     if self.index ~= #self.buffer then
-      return states.invalid
+      return self:invalid(result)
     end
     result.tag = "eof"
-    result.loc = {
-      start = self.index,
-      ["end"] = self.index,
-    }
-    result.finished = true
-    return
+    result.start = self.index
+    result["end"] = self.index
+    return result
   elseif c == ('\r'):byte() then
-    return states.expect_newline
+    return self:expect_newline(result)
   elseif c == ('\n'):byte() then
-    result.loc.start = self.index + 1
-    return states.start
+    self.index = self.index + 1
+    result.start = self.index
+    return self:start(result)
   elseif isControl(c) then
-    return states.invalid
+    return self:invalid(result)
   else
-    return current_state
+    return self:line_comment(result)
   end
 end
 
-states.doc_comment = function(self, c, result, current_state)
+function Tokenizer:doc_comment(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
   if c == 0 or c == ('\n'):byte() then
     return
   elseif c == ('\r'):byte() then
     if self.buffer:byte(self.index + 1) == ('\n'):byte() then
-      self.index = self.index + 1
       return
     else
-      return states.invalid
+      return self:invalid(result)
     end
   elseif isControl(c) then
-    return states.invalid
+    return self:invalid(result)
   else
-    return current_state
+    return self:doc_comment(result)
   end
 end
 
-states.int = function(self, c, result, current_state)
+function Tokenizer:int(result)
+  local c = self.buffer:byte(self.index)
   if c == ('.'):byte() then
-    return states.int_period
+    return self:int_period(result)
   elseif isNumberContinuation(c) then
-    return current_state
-  elseif c == ('e'):byte() or c == ('E'):byte() or c == ('p'):byte() or c == ('P'):byte() then
-    return states.int_exponent
-  else
-    return
-  end
-end
-
-states.int_exponent = function(self, c, result, current_state)
-  if c == ('-'):byte() or c == ('+'):byte() then
-    return states.float
-  else
-    self.index = self.index - 1
-    return states.int
-  end
-end
-
-states.int_period = function(self, c, result, current_state)
-  if isNumberContinuation(c) then
-    return states.float
-  elseif c == ('e'):byte() or c == ('E'):byte() or c == ('p'):byte() or c == ('P'):byte() then
-    return states.float_exponent
-  else
-    self.index = self.index - 1
-    return
-  end
-end
-
-states.float = function(self, c, result, current_state)
-  if isNumberContinuation(c) then
-    return current_state
-  elseif c == ('e'):byte() or c == ('E'):byte() or c == ('p'):byte() or c == ('P'):byte() then
-    return states.float_exponent
-  else
-    return
-  end
-end
-
-states.float_exponent = function(self, c, result, current_state)
-  if c == ('-'):byte() or c == ('+'):byte() then
-    return states.float
-  else
-    self.index = self.index - 1
-    return states.float
-  end
-end
-
-local function getStateName(state)
-  for name, fn in pairs(states) do
-    if fn == state then
-      return name
-    end
-  end
-end
-
-function Tokenizer:next()
-  local state = states.start
-  local result = {
-    tag = nil,
-    loc = {
-      start = self.index,
-      ["end"] = nil,
-    },
-    -- If set to true, then loc.end is not set automatically.
-    -- Before returning from `next`, this key is removed.
-    finished = false,
-  }
-  while state do
-    local c = self.buffer:byte(self.index)
-    state = state(self, c, result, state)
-    if not state then
-      if not result.finished then
-        result.loc["end"] = self.index - 1
-      end
-      break
-    end
     self.index = self.index + 1
+    return self:int(result)
+  elseif c == ('e'):byte() or c == ('E'):byte() or c == ('p'):byte() or c == ('P'):byte() then
+    return self:int_exponent(result)
+  else
+    return
   end
-  result.finished = nil
+end
+
+function Tokenizer:int_exponent(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
+  if c == ('-'):byte() or c == ('+'):byte() then
+    self.index = self.index + 1
+    return self:float(result)
+  else
+    return self:int(result)
+  end
+end
+
+function Tokenizer:int_period(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
+  if isNumberContinuation(c) then
+    return self:float(result)
+  elseif c == ('e'):byte() or c == ('E'):byte() or c == ('p'):byte() or c == ('P'):byte() then
+    return self:float_exponent(result)
+  else
+    self.index = self.index - 1
+    return
+  end
+end
+
+function Tokenizer:float(result)
+  local c = self.buffer:byte(self.index)
+  if isNumberContinuation(c) then
+    self.index = self.index + 1
+    return self:float(result)
+  elseif c == ('e'):byte() or c == ('E'):byte() or c == ('p'):byte() or c == ('P'):byte() then
+    return self:float_exponent(result)
+  else
+    return
+  end
+end
+
+function Tokenizer:float_exponent(result)
+  self.index = self.index + 1
+  local c = self.buffer:byte(self.index)
+  if c == ('-'):byte() or c == ('+'):byte() then
+    self.index = self.index + 1
+    return self:float(result)
+  else
+    return self:float(result)
+  end
+end
+
+function Tokenizer:next(result)
+  result = result or {}
+  result.start = self.index
+  local tok = self:start(result)
+  if tok then
+    return tok
+  end
+  result["end"] = self.index - 1
   return result
 end
 
@@ -876,7 +931,132 @@ local function getTokens(source)
   return tokens
 end
 
+local lexemes = {
+  invalid = false,
+  identifier = false,
+  string_literal = false,
+  multiline_string_literal_line = false,
+  char_literal = false,
+  eof = false,
+  builtin = false,
+  number_literal = false,
+  doc_comment = false,
+  container_doc_comment = false,
+
+  invalid_periodasterisks = ".**",
+  bang = "!",
+  pipe = "|",
+  pipe_pipe = "||",
+  pipe_equal = "|=",
+  equal = "=",
+  equal_equal = "==",
+  equal_angle_bracket_right = "=",
+  bang_equal = "!=",
+  l_paren = "(",
+  r_paren = ")",
+  semicolon = ";",
+  percent = "%",
+  percent_equal = "%=",
+  l_brace = "{",
+  r_brace = "}",
+  l_bracket = "[",
+  r_bracket = "]",
+  period = ".",
+  period_asterisk = ".*",
+  ellipsis2 = "..",
+  ellipsis3 = "...",
+  caret = "^",
+  caret_equal = "^=",
+  plus = "+",
+  plus_plus = "++",
+  plus_equal = "+=",
+  plus_percent = "+%",
+  plus_percent_equal = "+%=",
+  plus_pipe = "+|",
+  plus_pipe_equal = "+|=",
+  minus = "-",
+  minus_equal = "-=",
+  minus_percent = "-%",
+  minus_percent_equal = "-%=",
+  minus_pipe = "-|",
+  minus_pipe_equal = "-|=",
+  asterisk = "*",
+  asterisk_equal = "*=",
+  asterisk_asterisk = "**",
+  asterisk_percent = "*%",
+  asterisk_percent_equal = "*%=",
+  asterisk_pipe = "*|",
+  asterisk_pipe_equal = "*|=",
+  arrow = "->",
+  colon = ":",
+  slash = "/",
+  slash_equal = "/=",
+  comma = ",",
+  ampersand = "&",
+  ampersand_equal = "&=",
+  question_mark = "?",
+  angle_bracket_left = "<",
+  angle_bracket_left_equal = "<=",
+  angle_bracket_angle_bracket_left = "<<",
+  angle_bracket_angle_bracket_left_equal = "<<=",
+  angle_bracket_angle_bracket_left_pipe = "<<|",
+  angle_bracket_angle_bracket_left_pipe_equal = "<<|=",
+  angle_bracket_right = ">",
+  angle_bracket_right_equal = ">=",
+  angle_bracket_angle_bracket_right = ">>",
+  angle_bracket_angle_bracket_right_equal = ">>=",
+  tilde = "~",
+  keyword_addrspace = "addrspace",
+  keyword_align = "align",
+  keyword_allowzero = "allowzero",
+  keyword_and = "and",
+  keyword_anyframe = "anyframe",
+  keyword_anytype = "anytype",
+  keyword_asm = "asm",
+  keyword_break = "break",
+  keyword_callconv = "callconv",
+  keyword_catch = "catch",
+  keyword_comptime = "comptime",
+  keyword_const = "const",
+  keyword_continue = "continue",
+  keyword_defer = "defer",
+  keyword_else = "else",
+  keyword_enum = "enum",
+  keyword_errdefer = "errdefer",
+  keyword_error = "error",
+  keyword_export = "export",
+  keyword_extern = "extern",
+  keyword_fn = "fn",
+  keyword_for = "for",
+  keyword_if = "if",
+  keyword_inline = "inline",
+  keyword_noalias = "noalias",
+  keyword_noinline = "noinline",
+  keyword_nosuspend = "nosuspend",
+  keyword_opaque = "opaque",
+  keyword_or = "or",
+  keyword_orelse = "orelse",
+  keyword_packed = "packed",
+  keyword_pub = "pub",
+  keyword_resume = "resume",
+  keyword_return = "return",
+  keyword_linksection = "linksection",
+  keyword_struct = "struct",
+  keyword_suspend = "suspend",
+  keyword_switch = "switch",
+  keyword_test = "test",
+  keyword_threadlocal = "threadlocal",
+  keyword_try = "try",
+  keyword_union = "union",
+  keyword_unreachable = "unreachable",
+  keyword_var = "var",
+  keyword_volatile = "volatile",
+  keyword_while = "while",
+}
+
 return {
   Tokenizer = Tokenizer,
   getTokens = getTokens,
+  lexemes = lexemes,
+  isWhitespace = isWhitespace,
 }

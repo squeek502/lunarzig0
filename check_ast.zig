@@ -1,7 +1,7 @@
 const std = @import("std");
 
 pub fn main() !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
 
@@ -11,7 +11,13 @@ pub fn main() !void {
     if (args.len < 2) std.process.exit(1);
 
     const dirpath = args[1];
-    var dir = try std.fs.cwd().openDir(dirpath, .{ .iterate = true });
+    var dir = std.fs.cwd().openDir(dirpath, .{ .iterate = true }) catch |err| switch (err) {
+        error.NotDir => {
+            try check(allocator, dirpath);
+            return;
+        },
+        else => |e| return e,
+    };
     defer dir.close();
 
     var pathbuf: std.ArrayList(u8) = .empty;
@@ -33,16 +39,27 @@ pub fn main() !void {
         pathbuf.shrinkRetainingCapacity(pathbuf_len);
         try pathbuf.appendSlice(allocator, entry.path);
 
-        const lua_tokens = try getLua(allocator, pathbuf.items);
-        defer allocator.free(lua_tokens);
+        try check(allocator, pathbuf.items);
+    }
+}
 
-        const zig_tokens = try getZig(allocator, pathbuf.items);
-        defer allocator.free(zig_tokens);
+fn check(allocator: std.mem.Allocator, path: []const u8) !void {
+    const lua = try getLua(allocator, path);
+    defer allocator.free(lua);
 
-        std.testing.expectEqualStrings(zig_tokens, lua_tokens) catch |err| {
-            std.debug.print("{s}\n", .{pathbuf.items});
-            return err;
-        };
+    const zig = try getZig(allocator, path);
+    defer allocator.free(zig);
+
+    std.testing.expectEqualStrings(zig, lua) catch |err| {
+        std.debug.print("{s}\n", .{path});
+        return err;
+    };
+
+    var line_it = std.mem.tokenizeScalar(u8, lua, '\n');
+    while (line_it.next()) |line| {
+        if (std.mem.indexOf(u8, line, "TODO") != null) {
+            std.debug.print("{s}\n", .{line});
+        }
     }
 }
 
@@ -51,14 +68,19 @@ fn getLua(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
         .allocator = allocator,
         .argv = &.{
             "lua",
-            "dump_tokens.lua",
+            "dump_ast.lua",
             path,
         },
         .max_output_bytes = std.math.maxInt(usize),
     });
     defer allocator.free(result.stderr);
+    errdefer allocator.free(result.stdout);
 
-    if (result.term != .Exited or result.term.Exited != 0) return error.ProcessFailed;
+    if (result.term != .Exited or result.term.Exited != 0) {
+        std.debug.print("{s}\n", .{result.stdout});
+        std.debug.print("{s}\n", .{result.stderr});
+        return error.ProcessFailed;
+    }
     return result.stdout;
 }
 
@@ -66,13 +88,18 @@ fn getZig(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
     const result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{
-            "./dump_tokens",
+            "./dump_ast",
             path,
         },
         .max_output_bytes = std.math.maxInt(usize),
     });
     defer allocator.free(result.stderr);
+    errdefer allocator.free(result.stdout);
 
-    if (result.term != .Exited or result.term.Exited != 0) return error.ProcessFailed;
+    if (result.term != .Exited or result.term.Exited != 0) {
+        std.debug.print("{s}\n", .{result.stdout});
+        std.debug.print("{s}\n", .{result.stderr});
+        return error.ProcessFailed;
+    }
     return result.stdout;
 }
